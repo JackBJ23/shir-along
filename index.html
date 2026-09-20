@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>שירים · Hebrew lyrics with Spotify</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #131627;
+    --bg-2: #1b1f33;
+    --ink: #ece7db;
+    --dim: #4f5570;
+    --green: #5fd38d;
+    --green-deep: #2f9c5f;
+    --line: #2a2f47;
+    --font: 'Frank Ruhl Libre', 'David', 'Times New Roman', serif;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font);
+    font-weight: 300;
+    line-height: 1.4;
+    display: flex;
+    flex-direction: column;
+  }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+
+  /* Top bar */
+  header {
+    display: flex; align-items: center; gap: .75rem;
+    padding: .75rem 1rem;
+    border-bottom: 1px solid var(--line);
+    position: sticky; top: env(safe-area-inset-top, 0px);
+    background: var(--bg); z-index: 5;
+  }
+  header .now { flex: 1; min-width: 0; }
+  header .now .title { font-size: 1.05rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  header .now .artist { font-size: .85rem; color: var(--dim); }
+  .iconbtn {
+    background: none; border: 1px solid var(--line); border-radius: 999px;
+    padding: .35rem .8rem; font-size: .85rem; color: var(--ink);
+  }
+  .iconbtn:hover { border-color: var(--green-deep); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+  .dot.on { background: var(--green); box-shadow: 0 0 8px var(--green); }
+
+  /* Lyrics stage */
+  main { flex: 1; overflow-y: auto; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { main { scroll-behavior: auto; } }
+  .stage { max-width: 44rem; margin: 0 auto; padding: 40vh 1.25rem 45vh; }
+  .line { margin: 0 0 1.9rem; text-align: center; transition: opacity .3s; }
+  .line .he, .line .en {
+    display: inline-block;
+    color: transparent;
+    -webkit-background-clip: text; background-clip: text;
+    --p: 0%;
+  }
+  .line .he {
+    direction: rtl; unicode-bidi: isolate;
+    font-size: 1.8rem; font-weight: 500; line-height: 1.35;
+    background-image: linear-gradient(to left, var(--green) var(--p), var(--dim) var(--p));
+  }
+  .line .en {
+    display: block; margin-top: .2rem;
+    font-size: 1.05rem; font-weight: 300;
+    background-image: linear-gradient(to right, var(--green) var(--p), var(--dim) var(--p));
+  }
+  .line.current .he { font-size: 2.3rem; }
+  .line.current .en { font-size: 1.25rem; }
+  .line.done { opacity: .55; }
+  .line.upcoming { opacity: .7; }
+  @media (max-width: 480px) {
+    .line .he { font-size: 1.5rem; }
+    .line.current .he { font-size: 1.9rem; }
+  }
+
+  /* Empty / message states */
+  .msg { max-width: 30rem; margin: 20vh auto 0; padding: 0 1.5rem; text-align: center; }
+  .msg h1 { font-weight: 400; font-size: 2rem; margin: 0 0 .6rem; }
+  .msg p { color: #a6a9bb; margin: .4rem 0; }
+  .msg code { font-family: ui-monospace, Menlo, monospace; font-size: .85rem; background: var(--bg-2); padding: .15rem .4rem; border-radius: 4px; word-break: break-all; }
+  .primary {
+    background: var(--green); color: #0d2417; border: none; border-radius: 999px;
+    padding: .6rem 1.3rem; font-weight: 500; margin-top: 1rem;
+  }
+  .primary:hover { background: #79e0a2; }
+  .ghost { background: none; border: 1px solid var(--line); color: var(--ink); border-radius: 999px; padding: .5rem 1.1rem; margin-top: .6rem; }
+  .field { margin: 1rem auto 0; text-align: left; }
+  .field label { display: block; font-size: .85rem; color: #a6a9bb; margin-bottom: .3rem; }
+  .field input, .field textarea {
+    width: 100%; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: .55rem .7rem; color: var(--ink);
+  }
+  .field textarea { min-height: 9rem; resize: vertical; line-height: 1.5; }
+  .field textarea.he { direction: rtl; font-size: 1.1rem; }
+
+  /* Bottom controls */
+  footer {
+    border-top: 1px solid var(--line);
+    padding: .6rem 1rem;
+    padding-bottom: calc(.6rem + env(safe-area-inset-bottom, 0px));
+    display: flex; align-items: center; gap: .6rem; font-size: .85rem; color: #a6a9bb;
+    background: var(--bg);
+  }
+  footer .time { font-variant-numeric: tabular-nums; min-width: 4.5rem; }
+  footer .spacer { flex: 1; }
+
+  /* Sync editor */
+  .editor { max-width: 44rem; margin: 0 auto; padding: 1.5rem 1.25rem 6rem; }
+  .editor h1 { font-weight: 400; font-size: 1.7rem; margin: 0 0 .3rem; }
+  .editor p { color: #a6a9bb; margin: .3rem 0 1rem; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
+  .tap-list { list-style: none; padding: 0; margin: 1rem 0; }
+  .tap-list li { display: grid; grid-template-columns: 4.5rem 1fr; gap: .8rem; padding: .5rem .6rem; border-radius: 8px; align-items: baseline; }
+  .tap-list li.next { background: var(--bg-2); }
+  .tap-list li.stamped .t { color: var(--green); }
+  .tap-list .t { font-variant-numeric: tabular-nums; color: var(--dim); }
+  .tap-list .he { direction: rtl; text-align: right; font-size: 1.1rem; }
+  .tap-list .en { color: #a6a9bb; font-size: .9rem; }
+  .tapbtn {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px));
+    background: var(--green); color: #0d2417; border: none; border-radius: 999px;
+    padding: 1rem 2.2rem; font-size: 1.1rem; font-weight: 500; box-shadow: 0 6px 24px rgba(0,0,0,.4);
+  }
+  .tapbtn:active { transform: translateX(-50%) scale(.96); }
+  pre.out { background: var(--bg-2); padding: 1rem; border-radius: 8px; overflow-x: auto; font-size: .8rem; white-space: pre; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="dot" id="dot" title="Spotify connection"></span>
+  <div class="now">
+    <div class="title" id="nowTitle">Not connected</div>
+    <div class="artist" id="nowArtist">Open settings to connect Spotify</div>
+  </div>
+  <button class="iconbtn" id="btnEditor">Sync lyrics</button>
+  <button class="iconbtn" id="btnSettings">Settings</button>
+</header>
+
+<main id="main">
+  <!-- Viewer -->
+  <section id="viewer">
+    <div class="stage" id="stage"></div>
+    <div class="msg hidden" id="viewerMsg"></div>
+  </section>
+
+  <!-- Settings -->
+  <section id="settings" class="hidden">
+    <div class="msg">
+      <h1>Settings</h1>
+      <p>Paste the Client ID from your Spotify Developer app. In that app's settings, the redirect URI must be exactly:</p>
+      <p><code id="redirectUri"></code></p>
+      <div class="field">
+        <label for="clientId">Spotify Client ID</label>
+        <input id="clientId" autocomplete="off" spellcheck="false">
+      </div>
+      <button class="primary" id="btnConnect">Save and connect Spotify</button><br>
+      <button class="ghost" id="btnDisconnect">Disconnect</button>
+      <button class="ghost" id="btnBack1">Back to lyrics</button>
+      <div class="field">
+        <label for="offset">Timing offset for the current song (seconds, + = lyrics later)</label>
+        <input id="offset" type="number" step="0.1" value="0">
+      </div>
+    </div>
+  </section>
+
+  <!-- Sync editor -->
+  <section id="editor" class="hidden">
+    <div class="editor">
+      <h1>Sync lyrics</h1>
+      <p>Paste the Hebrew lines and their English translation, one line per row in each box. Then play the song in Spotify and tap <b>Now</b> (or press Space) each time a new line begins. When you're done, copy the JSON into <code>songs.json</code>.</p>
+      <div class="field">
+        <label for="edTrack">Spotify track ID</label>
+        <input id="edTrack" placeholder="Fills in automatically from what's playing" spellcheck="false">
+      </div>
+      <div class="cols">
+        <div class="field"><label for="edHe">Hebrew</label><textarea id="edHe" class="he"></textarea></div>
+        <div class="field"><label for="edEn">English</label><textarea id="edEn"></textarea></div>
+      </div>
+      <div class="cols">
+        <div class="field"><label for="edTitle">Title</label><input id="edTitle"></div>
+        <div class="field"><label for="edArtist">Artist</label><input id="edArtist"></div>
+      </div>
+      <button class="primary" id="btnStartTap">Start tapping</button>
+      <button class="ghost" id="btnResetTap">Reset times</button>
+      <button class="ghost" id="btnBack2">Back to lyrics</button>
+      <ol class="tap-list" id="tapList"></ol>
+      <div id="outWrap" class="hidden">
+        <p>Add this entry to <code>songs.json</code> (or replace the existing one for this track):</p>
+        <pre class="out" id="out"></pre>
+        <button class="ghost" id="btnCopy">Copy JSON</button>
+      </div>
+    </div>
+    <button class="tapbtn hidden" id="tapNow">Now</button>
+  </section>
+</main>
+
+<footer>
+  <button class="iconbtn" id="btnPlayPause">Play</button>
+  <span class="time" id="timeNow">0:00</span>
+  <span class="spacer"></span>
+  <span id="status">—</span>
+</footer>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- Config ----------
+  const SCOPES = 'user-read-playback-state user-modify-playback-state user-read-currently-playing';
+  const REDIRECT = location.origin + location.pathname;
+  const LS = {
+    get: (k, d = null) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+    del: (k) => { try { localStorage.removeItem(k); } catch {} },
+  };
+
+  // ---------- DOM ----------
+  const $ = (id) => document.getElementById(id);
+  const el = {
+    dot: $('dot'), nowTitle: $('nowTitle'), nowArtist: $('nowArtist'),
+    main: $('main'), viewer: $('viewer'), stage: $('stage'), viewerMsg: $('viewerMsg'),
+    settings: $('settings'), editor: $('editor'),
+    clientId: $('clientId'), redirectUri: $('redirectUri'), offset: $('offset'),
+    timeNow: $('timeNow'), status: $('status'), playPause: $('btnPlayPause'),
+    edTrack: $('edTrack'), edHe: $('edHe'), edEn: $('edEn'), edTitle: $('edTitle'), edArtist: $('edArtist'),
+    tapList: $('tapList'), tapNow: $('tapNow'), out: $('out'), outWrap: $('outWrap'),
+  };
+  el.redirectUri.textContent = REDIRECT;
+  el.clientId.value = LS.get('sp_client_id', '');
+
+  // ---------- State ----------
+  let songs = {};            // trackId -> {title, artist, lines:[{t,he,en}]}
+  let track = null;          // {id, title, artist, durationMs}
+  let playing = false;
+  let progressAtFetch = 0;   // ms
+  let fetchedAt = 0;         // performance.now()
+  let currentSong = null;    // song for the current track
+  let lineEls = [];
+  let lastCurrentIdx = -1;
+  let demoTimer = null;
+
+  // ---------- Views ----------
+  function show(view) {
+    for (const v of ['viewer', 'settings', 'editor']) el[v].classList.toggle('hidden', v !== view);
+    el.tapNow.classList.toggle('hidden', !(view === 'editor' && tapping));
+    el.main.scrollTop = 0;
+  }
+  $('btnSettings').onclick = () => show('settings');
+  $('btnEditor').onclick = () => { openEditor(); show('editor'); };
+  $('btnBack1').onclick = () => show('viewer');
+  $('btnBack2').onclick = () => show('viewer');
+
+  function message(html) {
+    el.stage.innerHTML = '';
+    el.viewerMsg.innerHTML = html;
+    el.viewerMsg.classList.remove('hidden');
+  }
+
+  // ---------- Lyrics data ----------
+  async function loadSongs() {
+    try {
+      const r = await fetch('songs.json', { cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status);
+      songs = await r.json();
+    } catch (e) {
+      songs = {};
+      el.status.textContent = 'Could not load songs.json';
+    }
+  }
+
+  // ---------- PKCE auth ----------
+  const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  async function login() {
+    const clientId = el.clientId.value.trim();
+    if (!clientId) { alert('Enter your Spotify Client ID first.'); return; }
+    LS.set('sp_client_id', clientId);
+    const verifier = b64url(crypto.getRandomValues(new Uint8Array(64)));
+    const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+    LS.set('sp_verifier', verifier);
+    const p = new URLSearchParams({
+      client_id: clientId, response_type: 'code', redirect_uri: REDIRECT,
+      scope: SCOPES, code_challenge_method: 'S256', code_challenge: challenge,
+    });
+    location.href = 'https://accounts.spotify.com/authorize?' + p;
+  }
+  async function tokenRequest(body) {
+    const r = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(body),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error_description || j.error || 'Token error');
+    LS.set('sp_access', j.access_token);
+    if (j.refresh_token) LS.set('sp_refresh', j.refresh_token);
+    LS.set('sp_expires', String(Date.now() + (j.expires_in - 60) * 1000));
+    return j.access_token;
+  }
+  async function handleRedirect() {
+    const u = new URL(location.href);
+    const code = u.searchParams.get('code');
+    const err = u.searchParams.get('error');
+    if (!code && !err) return;
+    history.replaceState({}, '', REDIRECT);
+    if (err) { el.status.textContent = 'Spotify login failed: ' + err; return; }
+    try {
+      await tokenRequest({
+        client_id: LS.get('sp_client_id'), grant_type: 'authorization_code', code,
+        redirect_uri: REDIRECT, code_verifier: LS.get('sp_verifier'),
+      });
+    } catch (e) { el.status.textContent = e.message; }
+  }
+  async function getToken() {
+    const access = LS.get('sp_access');
+    if (!access) return null;
+    if (Date.now() < Number(LS.get('sp_expires', '0'))) return access;
+    const refresh = LS.get('sp_refresh');
+    if (!refresh) return null;
+    try {
+      return await tokenRequest({ client_id: LS.get('sp_client_id'), grant_type: 'refresh_token', refresh_token: refresh });
+    } catch { logout(); return null; }
+  }
+  function logout() {
+    for (const k of ['sp_access', 'sp_refresh', 'sp_expires', 'sp_verifier']) LS.del(k);
+    track = null; playing = false; el.dot.classList.remove('on');
+    el.nowTitle.textContent = 'Not connected';
+    el.nowArtist.textContent = 'Open settings to connect Spotify';
+    renderForTrack();
+  }
+  $('btnConnect').onclick = login;
+  $('btnDisconnect').onclick = () => { logout(); show('viewer'); };
+
+  // ---------- Playback polling ----------
+  async function api(path, opts = {}) {
+    const token = await getToken();
+    if (!token) return null;
+    const r = await fetch('https://api.spotify.com/v1' + path, {
+      ...opts, headers: { Authorization: 'Bearer ' + token, ...(opts.headers || {}) },
+    });
+    if (r.status === 204) return { empty: true };
+    if (r.status === 401) { logout(); return null; }
+    if (r.status === 429) { el.status.textContent = 'Spotify rate limit, slowing down'; return null; }
+    if (!r.ok) { let j = {}; try { j = await r.json(); } catch {} throw new Error(j.error?.message || ('HTTP ' + r.status)); }
+    const t = await r.text();
+    return t ? JSON.parse(t) : { empty: true };
+  }
+  async function poll() {
+    if (demoTimer) return;
+    const token = await getToken();
+    if (!token) { el.dot.classList.remove('on'); return; }
+    try {
+      const s = await api('/me/player');
+      el.dot.classList.add('on');
+      if (!s || s.empty || !s.item) {
+        playing = false;
+        if (track) { track = null; renderForTrack(); }
+        el.nowTitle.textContent = 'Nothing playing';
+        el.nowArtist.textContent = 'Start a song in any Spotify app';
+        el.status.textContent = 'Connected';
+        return;
+      }
+      const id = s.item.id;
+      playing = !!s.is_playing;
+      progressAtFetch = s.progress_ms || 0;
+      fetchedAt = performance.now();
+      el.status.textContent = playing ? 'Playing on ' + (s.device?.name || 'Spotify') : 'Paused';
+      el.playPause.textContent = playing ? 'Pause' : 'Play';
+      if (!track || track.id !== id) {
+        track = { id, title: s.item.name, artist: (s.item.artists || []).map(a => a.name).join(', '), durationMs: s.item.duration_ms };
+        el.nowTitle.textContent = track.title;
+        el.nowArtist.textContent = track.artist;
+        renderForTrack();
+      }
+    } catch (e) { el.status.textContent = e.message; }
+  }
+  setInterval(poll, 1000);
+
+  $('btnPlayPause').onclick = async () => {
+    if (demoTimer) { demoPlaying = !demoPlaying; el.playPause.textContent = demoPlaying ? 'Pause' : 'Play'; if (demoPlaying) demoStart = performance.now() - demoPos; return; }
+    try { await api(playing ? '/me/player/pause' : '/me/player/play', { method: 'PUT' }); setTimeout(poll, 300); }
+    catch (e) { el.status.textContent = e.message + ' (play/pause needs Spotify Premium)'; }
+  };
+
+  function nowMs() {
+    if (demoTimer) return demoPlaying ? performance.now() - demoStart : demoPos;
+    if (!track) return 0;
+    const raw = playing ? progressAtFetch + (performance.now() - fetchedAt) : progressAtFetch;
+    return Math.min(raw, track.durationMs || Infinity);
+  }
+  function offsetMs() { return Number(LS.get('off_' + (track?.id || 'demo'), '0')) * 1000; }
+  el.offset.onchange = () => LS.set('off_' + (track?.id || 'demo'), el.offset.value);
+
+  // ---------- Rendering ----------
+  function renderForTrack() {
+    el.viewerMsg.classList.add('hidden');
+    el.stage.innerHTML = '';
+    lineEls = []; lastCurrentIdx = -1;
+    el.offset.value = LS.get('off_' + (track?.id || 'demo'), '0');
+    if (!track) {
+      const hasToken = !!LS.get('sp_access');
+      message(hasToken
+        ? '<h1>Nothing playing</h1><p>Play a song in any Spotify app on this account and the lyrics will appear here.</p>'
+        : '<h1>שירים</h1><p>Hebrew lyrics with an English translation, filling in green as the song plays.</p><button class="primary" id="msgConnect">Connect Spotify</button><br><button class="ghost" id="msgDemo">Try a demo without Spotify</button>');
+      const c = $('msgConnect'); if (c) c.onclick = () => show('settings');
+      const d = $('msgDemo'); if (d) d.onclick = startDemo;
+      return;
+    }
+    currentSong = songs[track.id] || null;
+    if (!currentSong || !currentSong.lines?.length) {
+      message(`<h1>No lyrics yet</h1><p>${escapeHtml(track.title)} — ${escapeHtml(track.artist)}</p>
+        <p>Track ID: <code>${escapeHtml(track.id)}</code></p>
+        <button class="primary" id="msgSync">Add and sync lyrics</button>`);
+      $('msgSync').onclick = () => { openEditor(); show('editor'); };
+      return;
+    }
+    for (const ln of currentSong.lines) {
+      const d = document.createElement('div');
+      d.className = 'line upcoming';
+      d.innerHTML = `<span class="he">${escapeHtml(ln.he || '')}</span><span class="en">${escapeHtml(ln.en || '')}</span>`;
+      el.stage.appendChild(d);
+      lineEls.push(d);
+    }
+  }
+  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+  function frame() {
+    requestAnimationFrame(frame);
+    const ms = nowMs();
+    el.timeNow.textContent = fmt(ms);
+    if (!currentSong || !lineEls.length) return;
+    const t = (ms - offsetMs()) / 1000;
+    const lines = currentSong.lines;
+    let idx = -1;
+    for (let i = 0; i < lines.length; i++) { if (t >= lines[i].t) idx = i; else break; }
+    for (let i = 0; i < lines.length; i++) {
+      const d = lineEls[i];
+      let p;
+      if (i < idx) p = 100;
+      else if (i > idx) p = 0;
+      else {
+        const start = lines[i].t;
+        const end = (lines[i].end != null) ? lines[i].end : (i + 1 < lines.length ? lines[i + 1].t : start + 4);
+        p = end > start ? Math.max(0, Math.min(100, (t - start) / (end - start) * 100)) : 100;
+      }
+      d.style.setProperty('--p', p.toFixed(1) + '%');
+      const cls = i < idx ? 'line done' : i === idx ? 'line current' : 'line upcoming';
+      if (d.className !== cls) d.className = cls;
+    }
+    if (idx !== lastCurrentIdx) {
+      lastCurrentIdx = idx;
+      if (idx >= 0 && !el.viewer.classList.contains('hidden')) lineEls[idx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
+  const fmt = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+
+  // ---------- Demo (no Spotify) ----------
+  let demoPlaying = false, demoStart = 0, demoPos = 0;
+  function startDemo() {
+    const id = Object.keys(songs)[0];
+    if (!id) { el.status.textContent = 'songs.json has no songs to demo'; return; }
+    const s = songs[id];
+    track = { id, title: s.title || 'Demo', artist: s.artist || '', durationMs: (s.lines.at(-1).t + 10) * 1000 };
+    demoTimer = true; demoPlaying = true; demoStart = performance.now(); demoPos = 0;
+    el.nowTitle.textContent = track.title; el.nowArtist.textContent = track.artist + ' (demo timer)';
+    el.status.textContent = 'Demo mode';
+    el.playPause.textContent = 'Pause';
+    renderForTrack();
+  }
+
+  // ---------- Sync editor ----------
+  let tapping = false, tapIdx = 0, tapTimes = [];
+  function openEditor() {
+    if (track && !demoTimer) {
+      el.edTrack.value = track.id;
+      if (!el.edTitle.value) el.edTitle.value = track.title;
+      if (!el.edArtist.value) el.edArtist.value = track.artist;
+      const existing = songs[track.id];
+      if (existing && !el.edHe.value) {
+        el.edHe.value = existing.lines.map(l => l.he).join('\n');
+        el.edEn.value = existing.lines.map(l => l.en).join('\n');
+      }
+    }
+  }
+  function lines() {
+    const he = el.edHe.value.split('\n').map(s => s.trim()).filter(Boolean);
+    const en = el.edEn.value.split('\n').map(s => s.trim());
+    return he.map((h, i) => ({ he: h, en: en[i] || '' }));
+  }
+  function renderTapList() {
+    const ls = lines();
+    el.tapList.innerHTML = ls.map((l, i) => {
+      const cls = (i < tapTimes.length ? 'stamped' : '') + (i === tapIdx && tapping ? ' next' : '');
+      const t = i < tapTimes.length ? tapTimes[i].toFixed(2) : '—';
+      return `<li class="${cls}"><span class="t">${t}</span><span><div class="he">${escapeHtml(l.he)}</div><div class="en">${escapeHtml(l.en)}</div></span></li>`;
+    }).join('');
+  }
+  $('btnStartTap').onclick = () => {
+    if (!lines().length) { alert('Paste some Hebrew lines first.'); return; }
+    if (!track) { alert('Start the song in Spotify (or the demo) first so there is a clock to sync to.'); return; }
+    tapping = true; tapIdx = 0; tapTimes = [];
+    el.outWrap.classList.add('hidden');
+    el.tapNow.classList.remove('hidden');
+    renderTapList();
+  };
+  $('btnResetTap').onclick = () => { tapping = false; tapIdx = 0; tapTimes = []; el.tapNow.classList.add('hidden'); el.outWrap.classList.add('hidden'); renderTapList(); };
+  function tap() {
+    if (!tapping) return;
+    const ls = lines();
+    tapTimes[tapIdx] = Math.round(nowMs()) / 1000;
+    tapIdx++;
+    renderTapList();
+    const li = el.tapList.children[Math.min(tapIdx, ls.length - 1)];
+    if (li) li.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (tapIdx >= ls.length) finishTap();
+  }
+  el.tapNow.onclick = tap;
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && tapping && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) { e.preventDefault(); tap(); }
+  });
+  function finishTap() {
+    tapping = false;
+    el.tapNow.classList.add('hidden');
+    const id = el.edTrack.value.trim() || 'TRACK_ID';
+    const entry = {
+      title: el.edTitle.value.trim(), artist: el.edArtist.value.trim(),
+      lines: lines().map((l, i) => ({ t: tapTimes[i], he: l.he, en: l.en })),
+    };
+    songs[id] = entry;                       // live preview until the page reloads
+    if (track && track.id === id) renderForTrack();
+    el.out.textContent = JSON.stringify({ [id]: entry }, null, 2).replace(/^\{\n|\n\}$/g, '');
+    el.outWrap.classList.remove('hidden');
+    el.outWrap.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+  $('btnCopy').onclick = async () => {
+    try { await navigator.clipboard.writeText(el.out.textContent); $('btnCopy').textContent = 'Copied'; }
+    catch { $('btnCopy').textContent = 'Select and copy manually'; }
+  };
+
+  // ---------- Boot ----------
+  (async () => {
+    await handleRedirect();
+    await loadSongs();
+    renderForTrack();
+    poll();
+    frame();
+  })();
+})();
+</script>
+</body>
+</html>
