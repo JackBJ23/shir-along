@@ -197,6 +197,10 @@
         <label for="apiKey">API key (kept in this browser only)</label>
         <input id="apiKey" type="password" autocomplete="off" spellcheck="false">
       </div>
+      <div class="field" id="wsField">
+        <label for="wsId">Anthropic workspace ID (only if the key isn't scoped to a workspace — starts with wrkspc_)</label>
+        <input id="wsId" autocomplete="off" spellcheck="false">
+      </div>
       <button class="ghost" id="btnSaveTranslator">Save</button>
       <button class="ghost" id="btnClearCache">Forget fetched songs</button>
     </div>
@@ -319,7 +323,13 @@
   el2.autoFetch.checked = LS.get('auto_fetch', '1') === '1';
   el2.translator.value = LS.get('translator', 'anthropic');
   el2.apiKey.value = LS.get('api_key_' + el2.translator.value, '');
-  const syncKeyField = () => { el2.apiKeyField.classList.toggle('hidden', el2.translator.value === 'mymemory'); el2.apiKey.value = LS.get('api_key_' + el2.translator.value, ''); };
+  const syncKeyField = () => {
+    el2.apiKeyField.classList.toggle('hidden', el2.translator.value === 'mymemory');
+    $('wsField').classList.toggle('hidden', el2.translator.value !== 'anthropic');
+    el2.apiKey.value = LS.get('api_key_' + el2.translator.value, '');
+  };
+  $('wsId').value = LS.get('anthropic_ws', '');
+  $('wsId').oninput = () => LS.set('anthropic_ws', $('wsId').value.trim());
   syncKeyField();
   el2.translator.onchange = () => { LS.set('translator', el2.translator.value); syncKeyField(); };
   el2.apiKey.oninput = () => LS.set('api_key_' + el2.translator.value, el2.apiKey.value.trim());
@@ -345,21 +355,38 @@
     return out;
   }
 
-  // Look the track up on LRCLIB. Returns {lines:[{t,he}], synced:bool} or null.
+  // Look the track up on LRCLIB (several query variants), then lyrics.ovh as an untimed fallback.
   async function fetchLrclib(tr) {
-    const q = new URLSearchParams({ track_name: tr.title, artist_name: tr.artist.split(',')[0].trim() });
-    const r = await fetch('https://lrclib.net/api/search?' + q);
-    if (!r.ok) throw new Error('LRCLIB error ' + r.status);
-    const results = await r.json();
-    if (!results.length) return null;
+    const artist = tr.artist.split(',')[0].trim();
+    const title = tr.title.replace(/\s*[\(\[-].*$/, '').trim() || tr.title;   // drop "(feat…)", "- Remastered"
+    const queries = [
+      { track_name: tr.title, artist_name: artist },
+      { track_name: title, artist_name: artist },
+      { q: `${title} ${artist}` },
+      { track_name: title },
+      { q: title },
+    ];
     const dur = (tr.durationMs || 0) / 1000;
-    const scored = results
-      .filter(x => x.syncedLyrics || x.plainLyrics)
-      .sort((a, b) => (b.syncedLyrics ? 1 : 0) - (a.syncedLyrics ? 1 : 0) || Math.abs((a.duration || 0) - dur) - Math.abs((b.duration || 0) - dur));
-    const best = scored[0];
-    if (!best) return null;
-    if (best.syncedLyrics) return { lines: parseLrc(best.syncedLyrics), synced: true };
-    return { lines: best.plainLyrics.split('\n').map(s => s.trim()).filter(Boolean).map(he => ({ he })), synced: false };
+    for (const params of queries) {
+      const r = await fetch('https://lrclib.net/api/search?' + new URLSearchParams(params));
+      if (!r.ok) continue;
+      const results = (await r.json()).filter(x => x.syncedLyrics || x.plainLyrics);
+      if (!results.length) continue;
+      // prefer synced, then closest duration; ignore results whose length is wildly off
+      results.sort((a, b) => (b.syncedLyrics ? 1 : 0) - (a.syncedLyrics ? 1 : 0) || Math.abs((a.duration || 0) - dur) - Math.abs((b.duration || 0) - dur));
+      const best = results.find(x => !dur || !x.duration || Math.abs(x.duration - dur) < 20) || null;
+      if (!best) continue;
+      if (best.syncedLyrics) return { lines: parseLrc(best.syncedLyrics), synced: true };
+      return { lines: best.plainLyrics.split('\n').map(s => s.trim()).filter(Boolean).map(he => ({ he })), synced: false };
+    }
+    try {
+      const r = await fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title)}`);
+      if (r.ok) {
+        const j = await r.json();
+        if (j.lyrics) return { lines: j.lyrics.split('\n').map(s => s.trim()).filter(Boolean).map(he => ({ he })), synced: false };
+      }
+    } catch {}
+    return null;
   }
 
   // Translate an array of Hebrew lines; returns array of English lines, same length.
@@ -380,9 +407,10 @@
     const prompt = `Translate these Hebrew song lyrics into natural, faithful English, line by line. Keep the same number of lines and the same order. Reply ONLY with a JSON array of ${heLines.length} strings, nothing else.\n\n${numbered}`;
     let text;
     if (provider === 'anthropic') {
+      const ws = LS.get('anthropic_ws', '');
       const r = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true', ...(ws ? { 'anthropic-workspace-id': ws } : {}) },
         body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 4000, messages: [{ role: 'user', content: prompt }] }),
       });
       const j = await r.json();
