@@ -99,6 +99,8 @@
   .ghost { background: none; border: 1px solid var(--line); color: var(--ink); border-radius: 999px; padding: .5rem 1.1rem; margin-top: .6rem; }
   .field { margin: 1rem auto 0; text-align: left; }
   .field label { display: block; font-size: .85rem; color: #a6a9bb; margin-bottom: .3rem; }
+  .field select { width: 100%; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: .55rem .7rem; color: var(--ink); }
+  .field input[type="checkbox"] { width: auto; margin-right: .4rem; }
   .field input, .field textarea {
     width: 100%; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px;
     padding: .55rem .7rem; color: var(--ink);
@@ -177,6 +179,26 @@
         <label for="offset">Timing offset for the current song (seconds, + = lyrics later)</label>
         <input id="offset" type="number" step="0.1" value="0">
       </div>
+
+      <h1 style="margin-top:2.5rem">Automatic lyrics</h1>
+      <p>New songs are looked up on LRCLIB (a free lyrics database with timings) and translated with the service you pick. Everything is stored only in this browser.</p>
+      <div class="field">
+        <label><input id="autoFetch" type="checkbox" checked> Fetch and translate new songs automatically</label>
+      </div>
+      <div class="field">
+        <label for="translator">Translation service</label>
+        <select id="translator">
+          <option value="anthropic">Claude (Anthropic API key)</option>
+          <option value="openai">OpenAI (API key)</option>
+          <option value="mymemory">MyMemory (free, no key, rougher quality)</option>
+        </select>
+      </div>
+      <div class="field" id="apiKeyField">
+        <label for="apiKey">API key (kept in this browser only)</label>
+        <input id="apiKey" type="password" autocomplete="off" spellcheck="false">
+      </div>
+      <button class="ghost" id="btnSaveTranslator">Save</button>
+      <button class="ghost" id="btnClearCache">Forget fetched songs</button>
     </div>
   </section>
 
@@ -184,11 +206,15 @@
   <section id="editor" class="hidden">
     <div class="editor">
       <h1>Sync lyrics</h1>
-      <p>Paste the Hebrew lines and their English translation, one line per row in each box. Then play the song in Spotify and tap <b>Now</b> (or press Space) each time a new line begins. When you're done, copy the JSON into <code>songs.json</code>.</p>
+      <p>Usually you won't need this page: new songs are fetched and translated automatically. Use it when a song isn't found, or to fix a translation or timing. Fill the boxes (or press the buttons), then either use the fetched timings or tap <b>Now</b> / Space at the start of each line.</p>
       <div class="field">
         <label for="edTrack">Spotify track ID</label>
         <input id="edTrack" placeholder="Fills in automatically from what's playing" spellcheck="false">
       </div>
+      <button class="ghost" id="btnFetchLyrics">Fetch Hebrew lyrics</button>
+      <button class="ghost" id="btnTranslate">Translate to English</button>
+      <button class="ghost hidden" id="btnUseTimes">Use fetched timings</button>
+      <span id="edStatus" style="color:#a6a9bb;font-size:.9rem;margin-left:.5rem"></span>
       <div class="cols">
         <div class="field"><label for="edHe">Hebrew</label><textarea id="edHe" class="he"></textarea></div>
         <div class="field"><label for="edEn">English</label><textarea id="edEn"></textarea></div>
@@ -202,7 +228,7 @@
       <button class="ghost" id="btnBack2">Back to lyrics</button>
       <ol class="tap-list" id="tapList"></ol>
       <div id="outWrap" class="hidden">
-        <p>Add this entry to <code>songs.json</code> (or replace the existing one for this track):</p>
+        <p>Saved in this browser. To keep it across devices, add this entry to <code>songs.json</code> in your repo:</p>
         <pre class="out" id="out"></pre>
         <button class="ghost" id="btnCopy">Copy JSON</button>
       </div>
@@ -283,6 +309,121 @@
       songs = {};
       el.status.textContent = 'Could not load songs.json';
     }
+    Object.assign(songs, cacheRead());   // songs fetched in this browser win over the repo file
+  }
+  function cacheRead() { try { return JSON.parse(LS.get('songs_cache', '{}')) || {}; } catch { return {}; } }
+  function cacheWrite(id, entry) { const c = cacheRead(); c[id] = entry; LS.set('songs_cache', JSON.stringify(c)); }
+
+  // ---------- Automatic lyrics: LRCLIB + translation ----------
+  const el2 = { autoFetch: $('autoFetch'), translator: $('translator'), apiKey: $('apiKey'), apiKeyField: $('apiKeyField'), edStatus: $('edStatus'), useTimes: $('btnUseTimes') };
+  el2.autoFetch.checked = LS.get('auto_fetch', '1') === '1';
+  el2.translator.value = LS.get('translator', 'anthropic');
+  el2.apiKey.value = LS.get('api_key_' + el2.translator.value, '');
+  const syncKeyField = () => { el2.apiKeyField.classList.toggle('hidden', el2.translator.value === 'mymemory'); el2.apiKey.value = LS.get('api_key_' + el2.translator.value, ''); };
+  syncKeyField();
+  el2.translator.onchange = syncKeyField;
+  el2.autoFetch.onchange = () => LS.set('auto_fetch', el2.autoFetch.checked ? '1' : '0');
+  $('btnSaveTranslator').onclick = () => {
+    LS.set('translator', el2.translator.value);
+    LS.set('api_key_' + el2.translator.value, el2.apiKey.value.trim());
+    $('btnSaveTranslator').textContent = 'Saved';
+    setTimeout(() => $('btnSaveTranslator').textContent = 'Save', 1500);
+  };
+  $('btnClearCache').onclick = () => { LS.del('songs_cache'); loadSongs().then(renderForTrack); };
+
+  // Parse "[mm:ss.xx] text" lines into [{t, he}]
+  function parseLrc(lrc) {
+    const out = [];
+    for (const raw of lrc.split('\n')) {
+      const m = raw.match(/^\s*\[(\d+):(\d+(?:\.\d+)?)\]\s*(.*)$/);
+      if (!m) continue;
+      const text = m[3].trim();
+      if (!text) continue;                                   // skip empty timestamps (instrumental gaps)
+      out.push({ t: Math.round((Number(m[1]) * 60 + Number(m[2])) * 100) / 100, he: text });
+    }
+    return out;
+  }
+
+  // Look the track up on LRCLIB. Returns {lines:[{t,he}], synced:bool} or null.
+  async function fetchLrclib(tr) {
+    const q = new URLSearchParams({ track_name: tr.title, artist_name: tr.artist.split(',')[0].trim() });
+    const r = await fetch('https://lrclib.net/api/search?' + q);
+    if (!r.ok) throw new Error('LRCLIB error ' + r.status);
+    const results = await r.json();
+    if (!results.length) return null;
+    const dur = (tr.durationMs || 0) / 1000;
+    const scored = results
+      .filter(x => x.syncedLyrics || x.plainLyrics)
+      .sort((a, b) => (b.syncedLyrics ? 1 : 0) - (a.syncedLyrics ? 1 : 0) || Math.abs((a.duration || 0) - dur) - Math.abs((b.duration || 0) - dur));
+    const best = scored[0];
+    if (!best) return null;
+    if (best.syncedLyrics) return { lines: parseLrc(best.syncedLyrics), synced: true };
+    return { lines: best.plainLyrics.split('\n').map(s => s.trim()).filter(Boolean).map(he => ({ he })), synced: false };
+  }
+
+  // Translate an array of Hebrew lines; returns array of English lines, same length.
+  async function translateLines(heLines) {
+    const provider = LS.get('translator', 'anthropic');
+    const key = LS.get('api_key_' + provider, '');
+    if (provider !== 'mymemory' && !key) throw new Error('Add an API key in Settings (or pick the free MyMemory option)');
+    if (provider === 'mymemory') {
+      const out = [];
+      for (const he of heLines) {
+        const r = await fetch('https://api.mymemory.translated.net/get?' + new URLSearchParams({ q: he, langpair: 'he|en' }));
+        const j = await r.json();
+        out.push(j.responseData?.translatedText || '');
+      }
+      return out;
+    }
+    const numbered = heLines.map((l, i) => `${i + 1}. ${l}`).join('\n');
+    const prompt = `Translate these Hebrew song lyrics into natural, faithful English, line by line. Keep the same number of lines and the same order. Reply ONLY with a JSON array of ${heLines.length} strings, nothing else.\n\n${numbered}`;
+    let text;
+    if (provider === 'anthropic') {
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 4000, messages: [{ role: 'user', content: prompt }] }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error?.message || 'Anthropic API error');
+      text = j.content.map(c => c.text || '').join('');
+    } else {
+      const r = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + key },
+        body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }] }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error?.message || 'OpenAI API error');
+      text = j.choices[0].message.content;
+    }
+    const clean = text.replace(/```json|```/g, '').trim();
+    const arr = JSON.parse(clean.slice(clean.indexOf('['), clean.lastIndexOf(']') + 1));
+    if (!Array.isArray(arr)) throw new Error('Unexpected translation format');
+    return heLines.map((_, i) => String(arr[i] ?? '').replace(/^\d+\.\s*/, ''));
+  }
+
+  // Full pipeline for the current track. Used automatically and by the button on the "No lyrics yet" screen.
+  const inFlight = new Set();
+  async function autoFetch(tr, statusEl) {
+    if (inFlight.has(tr.id)) return;
+    inFlight.add(tr.id);
+    const say = (m) => { if (statusEl) statusEl.textContent = m; el.status.textContent = m; };
+    try {
+      say('Looking up lyrics…');
+      const found = await fetchLrclib(tr);
+      if (!found || !found.lines.length) { say('Lyrics not found on LRCLIB — add them by hand in Sync lyrics'); LS.set('nolyrics_' + tr.id, '1'); return; }
+      say(`Translating ${found.lines.length} lines…`);
+      const en = await translateLines(found.lines.map(l => l.he));
+      const lines = found.lines.map((l, i) => ({ ...(l.t != null ? { t: l.t } : { t: i * 4 }), he: l.he, en: en[i] }));
+      const entry = { title: tr.title, artist: tr.artist, lines, source: found.synced ? 'lrclib-synced' : 'lrclib-untimed' };
+      songs[tr.id] = entry;
+      cacheWrite(tr.id, entry);
+      say(found.synced ? 'Lyrics ready' : 'Lyrics found but without timings — use Sync lyrics to tap them');
+      if (track && track.id === tr.id) renderForTrack();
+    } catch (e) {
+      say('Automatic lyrics failed: ' + e.message);
+    } finally { inFlight.delete(tr.id); }
   }
 
   // ---------- PKCE auth ----------
@@ -424,8 +565,12 @@
     if (!currentSong || !currentSong.lines?.length) {
       message(`<h1>No lyrics yet</h1><p>${escapeHtml(track.title)} — ${escapeHtml(track.artist)}</p>
         <p>Track ID: <code>${escapeHtml(track.id)}</code></p>
-        <button class="primary" id="msgSync">Add and sync lyrics</button>`);
+        <button class="primary" id="msgAuto">Fetch and translate automatically</button><br>
+        <button class="ghost" id="msgSync">Add and sync by hand</button>
+        <p id="msgStatus"></p>`);
       $('msgSync').onclick = () => { openEditor(); show('editor'); };
+      $('msgAuto').onclick = () => autoFetch(track, $('msgStatus'));
+      if (!demoTimer && el2.autoFetch.checked && !LS.get('nolyrics_' + track.id)) autoFetch(track, $('msgStatus'));
       return;
     }
     for (const ln of currentSong.lines) {
@@ -496,6 +641,34 @@
       }
     }
   }
+  let fetchedTimes = null;
+  $('btnFetchLyrics').onclick = async () => {
+    const tr = track && !demoTimer ? track : { id: el.edTrack.value, title: el.edTitle.value, artist: el.edArtist.value, durationMs: 0 };
+    if (!tr.title) { alert('Fill in the title and artist (or play the song) first.'); return; }
+    el2.edStatus.textContent = 'Looking up lyrics…';
+    try {
+      const found = await fetchLrclib(tr);
+      if (!found) { el2.edStatus.textContent = 'Not found on LRCLIB'; return; }
+      el.edHe.value = found.lines.map(l => l.he).join('\n');
+      fetchedTimes = found.synced ? found.lines.map(l => l.t) : null;
+      el2.useTimes.classList.toggle('hidden', !fetchedTimes);
+      el2.edStatus.textContent = found.synced ? `${found.lines.length} lines with timings` : `${found.lines.length} lines, no timings`;
+    } catch (e) { el2.edStatus.textContent = e.message; }
+  };
+  $('btnTranslate').onclick = async () => {
+    const he = el.edHe.value.split('\n').map(s => s.trim()).filter(Boolean);
+    if (!he.length) { alert('Paste or fetch Hebrew lines first.'); return; }
+    el2.edStatus.textContent = 'Translating…';
+    try { el.edEn.value = (await translateLines(he)).join('\n'); el2.edStatus.textContent = 'Translated'; }
+    catch (e) { el2.edStatus.textContent = e.message; }
+  };
+  el2.useTimes.onclick = () => {
+    if (!fetchedTimes) return;
+    tapping = false; tapTimes = fetchedTimes.slice(0, lines().length); tapIdx = tapTimes.length;
+    renderTapList(); finishTap();
+  };
+  el.edHe.oninput = () => { fetchedTimes = null; el2.useTimes.classList.add('hidden'); };
+
   function lines() {
     const he = el.edHe.value.split('\n').map(s => s.trim()).filter(Boolean);
     const en = el.edEn.value.split('\n').map(s => s.trim());
@@ -540,7 +713,9 @@
       title: el.edTitle.value.trim(), artist: el.edArtist.value.trim(),
       lines: lines().map((l, i) => ({ t: tapTimes[i], he: l.he, en: l.en })),
     };
-    songs[id] = entry;                       // live preview until the page reloads
+    songs[id] = entry;
+    cacheWrite(id, entry);                   // remembered in this browser; the JSON below is for the repo
+    LS.del('nolyrics_' + id);
     if (track && track.id === id) renderForTrack();
     el.out.textContent = JSON.stringify({ [id]: entry }, null, 2).replace(/^\{\n|\n\}$/g, '');
     el.outWrap.classList.remove('hidden');

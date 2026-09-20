@@ -21,14 +21,17 @@ Notes:
 - Spotify apps start in "development mode": only the account that created the app (plus up to 25 users you add in the dashboard) can log in. That's fine for personal use.
 - Play music in any Spotify app (phone, desktop, web) — the site just follows along.
 
-## 3. Add lyrics for a song
+## 3. Lyrics and translation (automatic)
 
-Spotify doesn't provide lyrics through its API, so you add them yourself:
+When a song without lyrics starts, the site looks it up on [LRCLIB](https://lrclib.net) (a free, open lyrics database — many entries include line timings) and translates the Hebrew with the service chosen in Settings:
 
-1. Play the song. The site shows "No lyrics yet" with the track ID, and a button "Add and sync lyrics".
-2. In the sync editor, paste the Hebrew lines in the left box and the English lines in the right box (one line per row, same order).
-3. Press "Start tapping", restart the song in Spotify, and tap **Now** (or press Space) at the moment each line begins.
-4. Copy the JSON it produces and paste it into `songs.json` in your repo (commit the change). The site also previews it immediately.
+- **Claude** — paste an Anthropic API key (console.anthropic.com). Best quality.
+- **OpenAI** — paste an OpenAI API key.
+- **MyMemory** — free, no key, noticeably rougher.
+
+The key is stored only in your browser's local storage and sent only to that provider. Fetched songs are also cached in the browser, so they load instantly next time on the same device. To share a song across devices, open Sync lyrics → "Fetch Hebrew lyrics" → "Translate" → "Use fetched timings" and commit the JSON it shows into `songs.json`.
+
+If LRCLIB doesn't have the song (or has it without timings), the Sync lyrics page lets you paste the Hebrew, translate it, and tap **Now** / Space at the start of each line to time it.
 
 `songs.json` format — one entry per Spotify track ID:
 
