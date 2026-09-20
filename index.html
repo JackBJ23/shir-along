@@ -60,12 +60,12 @@
   main { flex: 1; overflow-y: auto; scroll-behavior: smooth; }
   @media (prefers-reduced-motion: reduce) { main { scroll-behavior: auto; } }
   .stage { max-width: 44rem; margin: 0 auto; padding: 40vh 1.25rem 45vh; }
-  .line { margin: 0 0 1.9rem; text-align: center; transition: opacity .3s; }
+  .line { margin: 0 0 1.9rem; text-align: center; transition: opacity .3s; --p: 0%; }
   .line .he, .line .en {
     display: inline-block;
     color: transparent;
+    -webkit-text-fill-color: transparent;
     -webkit-background-clip: text; background-clip: text;
-    --p: 0%;
   }
   .line .he {
     direction: rtl; unicode-bidi: isolate;
@@ -220,8 +220,8 @@
       <h1>Translate a whole playlist</h1>
       <p>Looks up and translates every song in a playlist once, using the service in Settings, and stores the results in this browser. When it finishes, download <code>songs.json</code> and commit it to the repo so everyone gets the lyrics with no API key. Songs already done are skipped, so you can stop and resume.</p>
       <div class="field">
-        <label for="plUrl">Playlist link or ID</label>
-        <input id="plUrl" placeholder="https://open.spotify.com/playlist/…" spellcheck="false">
+        <label for="plUrl">Playlist link, or "liked" for your Liked Songs</label>
+        <input id="plUrl" placeholder="https://open.spotify.com/playlist/… or liked" spellcheck="false">
       </div>
       <div class="field">
         <label><input id="plRetry" type="checkbox"> Retry songs that weren't found last time</label>
@@ -246,6 +246,8 @@
         <input id="edTrack" placeholder="Fills in automatically from what's playing" spellcheck="false">
       </div>
       <button class="ghost" id="btnFetchLyrics">Fetch Hebrew lyrics</button>
+      <button class="ghost" id="btnShironet">Search Shironet</button>
+      <button class="ghost" id="btnGenius">Search Genius</button>
       <button class="ghost" id="btnTranslate">Translate to English</button>
       <button class="ghost hidden" id="btnUseTimes">Use fetched timings</button>
       <span id="edStatus" style="color:#a6a9bb;font-size:.9rem;margin-left:.5rem"></span>
@@ -284,8 +286,8 @@
 
   // ---------- Config ----------
   // Your Spotify app's Client ID (public, not a secret). Visitors then just press "Connect Spotify".
-  const SPOTIFY_CLIENT_ID = 'd58683844d184f28b8a30607f2f76fe2';
-  const SCOPES = 'user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private';
+  const SPOTIFY_CLIENT_ID = 'PASTE_YOUR_CLIENT_ID_HERE';
+  const SCOPES = 'user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private user-library-read';
   const REDIRECT = location.origin + location.pathname;
   const LS = {
     get: (k, d = null) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
@@ -489,7 +491,7 @@
     try {
       say('Looking up lyrics…');
       const found = await fetchLrclib(tr);
-      if (!found || !found.lines.length) { say('Lyrics not found on LRCLIB — add them by hand in Sync lyrics'); LS.set('nolyrics_' + tr.id, '1'); return; }
+      if (!found || !found.lines.length) { say('Lyrics not found online — press "Add and sync by hand", then use the Shironet or Genius buttons to find and paste them'); LS.set('nolyrics_' + tr.id, '1'); return; }
       say(`Translating ${found.lines.length} lines…`);
       const en = await translateLines(found.lines.map(l => l.he));
       const lines = found.lines.map((l, i) => ({ ...(l.t != null ? { t: l.t } : { t: i * 4 }), he: l.he, en: en[i] }));
@@ -718,6 +720,12 @@
       }
     }
   }
+  const searchQuery = () => {
+    const tr = track && !demoTimer ? track : { title: el.edTitle.value, artist: el.edArtist.value };
+    return `${tr.title || ''} ${(tr.artist || '').split(',')[0]}`.trim();
+  };
+  $('btnShironet').onclick = () => window.open('https://shironet.mako.co.il/search?q=' + encodeURIComponent(searchQuery()), '_blank');
+  $('btnGenius').onclick = () => window.open('https://genius.com/search?q=' + encodeURIComponent(searchQuery()), '_blank');
   let fetchedTimes = null;
   $('btnFetchLyrics').onclick = async () => {
     const tr = track && !demoTimer ? track : { id: el.edTrack.value, title: el.edTitle.value, artist: el.edArtist.value, durationMs: 0 };
@@ -811,12 +819,17 @@
 
   async function playlistTracks(id) {
     const out = [];
-    let path = `/playlists/${id}/tracks?limit=100&fields=next,items(track(id,name,duration_ms,artists(name)))`;
+    // Spotify renamed /tracks → /items (Feb 2026) and track → item in the response.
+    let path = id === 'liked'
+      ? '/me/tracks?limit=50'
+      : `/playlists/${id}/items?limit=100&fields=next,items(item(id,name,duration_ms,artists(name)))`;
     while (path) {
-      const page = await api(path);
-      if (!page || page.empty) throw new Error('Could not read the playlist (is it private and owned by another account?)');
+      let page;
+      try { page = await api(path); }
+      catch (e) { throw new Error(/403|Forbidden/.test(e.message) ? 'Spotify only lets this app read playlists you own or collaborate on. Copy the songs into a playlist of your own and use that link.' : e.message); }
+      if (!page || page.empty || !page.items) throw new Error('Spotify only lets this app read playlists you own or collaborate on. Copy the songs into a playlist of your own and use that link.');
       for (const it of page.items) {
-        const t = it.track;
+        const t = it.item || it.track;
         if (t && t.id) out.push({ id: t.id, title: t.name, artist: (t.artists || []).map(a => a.name).join(', '), durationMs: t.duration_ms });
       }
       path = page.next ? page.next.replace('https://api.spotify.com/v1', '') : null;
@@ -833,8 +846,10 @@
 
   $('btnBatchStart').onclick = async () => {
     if (batchRunning) return;
-    const m = $('plUrl').value.match(/playlist[/:]([A-Za-z0-9]+)/) || [null, $('plUrl').value.trim()];
-    const plId = m[1];
+    const raw = $('plUrl').value.trim();
+    const isLiked = /collection\/tracks|^liked/i.test(raw);
+    const m = raw.match(/playlist[/:]([A-Za-z0-9]+)/) || [null, raw];
+    const plId = isLiked ? 'liked' : m[1];
     if (!plId) { alert('Paste a playlist link first.'); return; }
     if (!LS.get('sp_access')) { alert('Connect Spotify first (Settings).'); return; }
     LS.set('pl_url', $('plUrl').value);
