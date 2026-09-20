@@ -321,7 +321,8 @@
   el2.apiKey.value = LS.get('api_key_' + el2.translator.value, '');
   const syncKeyField = () => { el2.apiKeyField.classList.toggle('hidden', el2.translator.value === 'mymemory'); el2.apiKey.value = LS.get('api_key_' + el2.translator.value, ''); };
   syncKeyField();
-  el2.translator.onchange = syncKeyField;
+  el2.translator.onchange = () => { LS.set('translator', el2.translator.value); syncKeyField(); };
+  el2.apiKey.oninput = () => LS.set('api_key_' + el2.translator.value, el2.apiKey.value.trim());
   el2.autoFetch.onchange = () => LS.set('auto_fetch', el2.autoFetch.checked ? '1' : '0');
   $('btnSaveTranslator').onclick = () => {
     LS.set('translator', el2.translator.value);
