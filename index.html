@@ -167,13 +167,16 @@
   <section id="settings" class="hidden">
     <div class="msg">
       <h1>Settings</h1>
-      <p>Paste the Client ID from your Spotify Developer app. In that app's settings, the redirect URI must be exactly:</p>
-      <p><code id="redirectUri"></code></p>
-      <div class="field">
-        <label for="clientId">Spotify Client ID</label>
-        <input id="clientId" autocomplete="off" spellcheck="false">
+      <p>Connect with your own Spotify account. The site only reads what you're playing.</p>
+      <div id="clientIdBox">
+        <p>Site owner: paste the Client ID from your Spotify Developer app (or set it in index.html). The app's redirect URI must be exactly:</p>
+        <p><code id="redirectUri"></code></p>
+        <div class="field">
+          <label for="clientId">Spotify Client ID</label>
+          <input id="clientId" autocomplete="off" spellcheck="false">
+        </div>
       </div>
-      <button class="primary" id="btnConnect">Save and connect Spotify</button><br>
+      <button class="primary" id="btnConnect">Connect Spotify</button><br>
       <button class="ghost" id="btnDisconnect">Disconnect</button>
       <button class="ghost" id="btnBack1">Back to lyrics</button>
       <div class="field">
@@ -226,6 +229,7 @@
       <button class="primary" id="btnBatchStart">Start</button>
       <button class="ghost" id="btnBatchStop">Stop</button>
       <button class="ghost" id="btnDownloadJson">Download songs.json</button>
+      <button class="ghost" id="btnDownloadReport">Download report</button>
       <button class="ghost" id="btnBack3">Back to lyrics</button>
       <p id="plProgress" style="margin-top:1.2rem"></p>
       <ol class="tap-list" id="plLog"></ol>
@@ -279,6 +283,8 @@
   'use strict';
 
   // ---------- Config ----------
+  // Your Spotify app's Client ID (public, not a secret). Visitors then just press "Connect Spotify".
+  const SPOTIFY_CLIENT_ID = 'PASTE_YOUR_CLIENT_ID_HERE';
   const SCOPES = 'user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private';
   const REDIRECT = location.origin + location.pathname;
   const LS = {
@@ -299,7 +305,9 @@
     tapList: $('tapList'), tapNow: $('tapNow'), out: $('out'), outWrap: $('outWrap'),
   };
   el.redirectUri.textContent = REDIRECT;
-  el.clientId.value = LS.get('sp_client_id', '');
+  const builtInClientId = SPOTIFY_CLIENT_ID.startsWith('PASTE') ? '' : SPOTIFY_CLIENT_ID;
+  el.clientId.value = LS.get('sp_client_id', '') || builtInClientId;
+  $('clientIdBox').classList.toggle('hidden', !!builtInClientId);
 
   // ---------- State ----------
   let songs = {};            // trackId -> {title, artist, lines:[{t,he,en}]}
@@ -498,8 +506,8 @@
   // ---------- PKCE auth ----------
   const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   async function login() {
-    const clientId = el.clientId.value.trim();
-    if (!clientId) { alert('Enter your Spotify Client ID first.'); return; }
+    const clientId = el.clientId.value.trim() || builtInClientId;
+    if (!clientId) { alert('The site owner needs to set the Spotify Client ID in index.html.'); return; }
     LS.set('sp_client_id', clientId);
     const verifier = b64url(crypto.getRandomValues(new Uint8Array(64)));
     const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
@@ -530,7 +538,7 @@
     if (err) { el.status.textContent = 'Spotify login failed: ' + err; return; }
     try {
       await tokenRequest({
-        client_id: LS.get('sp_client_id'), grant_type: 'authorization_code', code,
+        client_id: LS.get('sp_client_id') || builtInClientId, grant_type: 'authorization_code', code,
         redirect_uri: REDIRECT, code_verifier: LS.get('sp_verifier'),
       });
     } catch (e) { el.status.textContent = e.message; }
@@ -542,7 +550,7 @@
     const refresh = LS.get('sp_refresh');
     if (!refresh) return null;
     try {
-      return await tokenRequest({ client_id: LS.get('sp_client_id'), grant_type: 'refresh_token', refresh_token: refresh });
+      return await tokenRequest({ client_id: LS.get('sp_client_id') || builtInClientId, grant_type: 'refresh_token', refresh_token: refresh });
     } catch { logout(); return null; }
   }
   function logout() {
@@ -839,17 +847,19 @@
 
     const seen = new Set();
     tracks = tracks.filter(t => !seen.has(t.id) && seen.add(t.id));
-    let done = 0, found = 0, missing = 0, failed = 0, skipped = 0;
-    const missingList = [];
+    let done = 0, found = 0, skipped = 0;
+    const report = { translated: [], untimed: [], notFound: [], failed: [] };
+    const label = (tr) => `${tr.title} — ${tr.artist}`;
     for (const tr of tracks) {
       if (!batchRunning) break;
       done++;
       plProgress.textContent = `${done} / ${tracks.length} — ${tr.title} · ${tr.artist}`;
-      if (songs[tr.id]?.lines?.length) { skipped++; continue; }
-      if (!retry && LS.get('nolyrics_' + tr.id)) { skipped++; missingList.push(tr); continue; }
+      const have = songs[tr.id];
+      if (have?.lines?.length) { skipped++; (have.source === 'lrclib-untimed' ? report.untimed : report.translated).push(label(tr)); continue; }
+      if (!retry && LS.get('nolyrics_' + tr.id)) { skipped++; report.notFound.push(label(tr)); continue; }
       try {
         const res = await fetchLrclib(tr);
-        if (!res || !res.lines.length) { LS.set('nolyrics_' + tr.id, '1'); missing++; missingList.push(tr); logRow(`Not found: ${tr.title} — ${tr.artist}`); continue; }
+        if (!res || !res.lines.length) { LS.set('nolyrics_' + tr.id, '1'); report.notFound.push(label(tr)); logRow(`Not found: ${label(tr)}`); continue; }
         let en;
         for (let attempt = 0; ; attempt++) {
           try { en = await translateLines(res.lines.map(l => l.he)); break; }
@@ -859,28 +869,44 @@
         const entry = { title: tr.title, artist: tr.artist, lines, source: res.synced ? 'lrclib-synced' : 'lrclib-untimed' };
         songs[tr.id] = entry; cacheWrite(tr.id, entry); LS.del('nolyrics_' + tr.id);
         found++;
-        logRow(`${res.synced ? 'Done' : 'Done (no timings)'}: ${tr.title} — ${tr.artist}`, 'stamped');
+        (res.synced ? report.translated : report.untimed).push(label(tr));
+        logRow(`${res.synced ? 'Done' : 'Done (no timings)'}: ${label(tr)}`, 'stamped');
       } catch (e) {
-        failed++;
-        logRow(`Failed: ${tr.title} — ${e.message}`);
+        report.failed.push(`${label(tr)} (${e.message})`);
+        logRow(`Failed: ${label(tr)} — ${e.message}`);
         if (/API key|workspace/i.test(e.message)) { plProgress.textContent = 'Stopped: ' + e.message; batchRunning = false; return; }
       }
       await sleep(400);
     }
+    const stopped = !batchRunning;
     batchRunning = false;
-    plProgress.textContent = `Finished. Translated ${found}, already had ${skipped}, not found ${missing + (retry ? 0 : missingList.length - missing)}, failed ${failed}. Now press "Download songs.json".`;
-    if (missingList.length) logRow(`Songs without lyrics online (add by hand): ${missingList.map(t => t.title).join(' · ')}`);
+    const nT = report.translated.length, nU = report.untimed.length, nN = report.notFound.length, nF = report.failed.length;
+    plProgress.textContent = `${stopped && done < tracks.length ? 'Stopped' : 'Finished'}: ${nT + nU} translated (${nU} without timings) and ${nN} not translated (no lyrics found)` + (nF ? `, ${nF} failed` : '') + `. Now press "Download songs.json".`;
+    lastReport = [
+      `Playlist report — ${new Date().toLocaleString()}`,
+      `${tracks.length} songs in playlist · ${nT + nU} translated (${nU} without timings) · ${nN} not translated (no lyrics found)` + (nF ? ` · ${nF} failed` : ''),
+      '', `TRANSLATED (${nT})`, ...report.translated,
+      '', `TRANSLATED, NO TIMINGS — tap them in Sync lyrics (${nU})`, ...report.untimed,
+      '', `NOT TRANSLATED — no lyrics found online, add by hand (${nN})`, ...report.notFound,
+      ...(nF ? ['', `FAILED (${nF})`, ...report.failed] : []),
+    ].join('\n');
+    downloadText('playlist-report.txt', lastReport);
   };
+  let lastReport = '';
+  function downloadText(name, text, type = 'text/plain') {
+    const blob = new Blob([text], { type });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+  $('btnDownloadReport').onclick = () => { if (!lastReport) { alert('Run a playlist first.'); return; } downloadText('playlist-report.txt', lastReport); };
   $('btnBatchStop').onclick = () => { batchRunning = false; plProgress.textContent += ' — stopping after this song'; };
 
   $('btnDownloadJson').onclick = () => {
     const out = {};
     for (const [id, s] of Object.entries(songs)) if (!id.startsWith('REPLACE') && s.lines?.length) out[id] = s;
-    const blob = new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = 'songs.json';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    downloadText('songs.json', JSON.stringify(out, null, 1), 'application/json');
   };
 
   // ---------- Boot ----------
